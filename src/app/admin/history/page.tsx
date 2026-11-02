@@ -56,25 +56,36 @@ interface HistoryItem {
 }
 
 export default function AdminHistoryPage() {
+  // State filter periode: selectedYear & selectedMonth
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [dateBounds, setDateBounds] = useState<{ earliest: string | null; latest: string | null }>({
+    earliest: null,
+    latest: null,
+  });
 
-  // Default periode: bulan sekarang (YYYY-MM)
   const now = new Date();
-  const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // 1-12
+
+  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
+  const [selectedMonth, setSelectedMonth] = useState<number>(currentMonth);
 
   // Selected Item for Detail Modal
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
 
-  const fetchHistory = async (month: string) => {
+  const fetchHistory = async (year: number, month: number) => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/admin/history?month=${month}`);
+      const periodStr = `${year}-${String(month).padStart(2, "0")}`;
+      const res = await fetch(`/api/admin/history?period=${encodeURIComponent(periodStr)}`);
       const json = await res.json();
       if (res.ok) {
         setItems(json.items || []);
+        if (json.dateRange) {
+          setDateBounds(json.dateRange);
+        }
       }
     } catch (e) {
       console.error(e);
@@ -84,32 +95,106 @@ export default function AdminHistoryPage() {
   };
 
   useEffect(() => {
-    fetchHistory(selectedMonth);
-  }, [selectedMonth]);
+    fetchHistory(selectedYear, selectedMonth);
+  }, [selectedYear, selectedMonth]);
 
-  // Generate list pilihan 6 bulan terakhir untuk dropdown cepat
-  const monthOptions = useMemo(() => {
-    const list = [];
-    const date = new Date();
-    for (let i = 0; i < 12; i++) {
-      const d = new Date(date.getFullYear(), date.getMonth() - i, 1);
-      const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const label = d.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
-      list.push({ val, label });
+  // Hitung batasan tahun & bulan awal berdasarkan data terlama di database
+  const boundsInfo = useMemo(() => {
+    const today = new Date();
+    const curY = today.getFullYear();
+    const curM = today.getMonth() + 1; // 1 - 12
+
+    let startY = curY;
+    let startM = curM;
+
+    if (dateBounds.earliest) {
+      const eDate = new Date(dateBounds.earliest);
+      if (!isNaN(eDate.getTime())) {
+        startY = eDate.getFullYear();
+        startM = eDate.getMonth() + 1;
+      }
     }
-    return list;
-  }, []);
+
+    // Daftar pilihan Tahun: dari startY sampai curY
+    const yearOptions: number[] = [];
+    for (let yr = curY; yr >= startY; yr--) {
+      yearOptions.push(yr);
+    }
+
+    return { startY, startM, curY, curM, yearOptions };
+  }, [dateBounds]);
+
+  // Daftar nama bulan dalam Bahasa Indonesia
+  const allMonths = [
+    { value: 1, label: "Januari" },
+    { value: 2, label: "Februari" },
+    { value: 3, label: "Maret" },
+    { value: 4, label: "April" },
+    { value: 5, label: "Mei" },
+    { value: 6, label: "Juni" },
+    { value: 7, label: "Juli" },
+    { value: 8, label: "Agustus" },
+    { value: 9, label: "September" },
+    { value: 10, label: "Oktober" },
+    { value: 11, label: "November" },
+    { value: 12, label: "Desember" },
+  ];
+
+  // Pilihan Bulan yang aktif untuk tahun yang sedang dipilih
+  // - Jika memilih tahun data paling awal (startY): bulan sebelum startM dinonaktifkan / tidak muncul
+  // - Jika memilih tahun saat ini (curY): bulan setelah curM tidak muncul
+  // - Jika memilih tahun di antaranya: full 12 bulan (Jan - Des)
+  const availableMonths = useMemo(() => {
+    const { startY, startM, curY, curM } = boundsInfo;
+
+    return allMonths.filter((m) => {
+      if (selectedYear === startY && m.value < startM) {
+        return false;
+      }
+      if (selectedYear === curY && m.value > curM) {
+        return false;
+      }
+      return true;
+    });
+  }, [selectedYear, boundsInfo]);
+
+  // Jika pergantian tahun membuat selectedMonth berada di luar availableMonths, auto-adjust ke bulan valid
+  const handleYearChange = (newYear: number) => {
+    setSelectedYear(newYear);
+    const { startY, startM, curY, curM } = boundsInfo;
+    let validMonth = selectedMonth;
+
+    if (newYear === startY && validMonth < startM) {
+      validMonth = startM;
+    }
+    if (newYear === curY && validMonth > curM) {
+      validMonth = curM;
+    }
+    setSelectedMonth(validMonth);
+  };
 
   const handlePrevMonth = () => {
-    const [y, m] = selectedMonth.split("-").map(Number);
-    const d = new Date(y, m - 2, 1);
-    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    const { startY, startM } = boundsInfo;
+    if (selectedYear === startY && selectedMonth <= startM) return; // Sudah di titik paling awal
+
+    if (selectedMonth > 1) {
+      setSelectedMonth((prev) => prev - 1);
+    } else {
+      setSelectedYear((prev) => prev - 1);
+      setSelectedMonth(12);
+    }
   };
 
   const handleNextMonth = () => {
-    const [y, m] = selectedMonth.split("-").map(Number);
-    const d = new Date(y, m, 1);
-    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    const { curY, curM } = boundsInfo;
+    if (selectedYear === curY && selectedMonth >= curM) return; // Sudah di titik paling akhir
+
+    if (selectedMonth < 12) {
+      setSelectedMonth((prev) => prev + 1);
+    } else {
+      setSelectedYear((prev) => prev + 1);
+      setSelectedMonth(1);
+    }
   };
 
   const filtered = items.filter((it) => {
@@ -139,7 +224,7 @@ export default function AdminHistoryPage() {
           </p>
         </div>
         <button
-          onClick={() => fetchHistory(selectedMonth)}
+          onClick={() => fetchHistory(selectedYear, selectedMonth)}
           className="px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2 shadow-sm"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -147,40 +232,62 @@ export default function AdminHistoryPage() {
         </button>
       </div>
 
-      {/* Filter Bar: Periode Kalender & Pencarian */}
+      {/* Filter Bar: Periode Kalender (Bulan & Tahun Dinamis) & Pencarian */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-        {/* Kalender Selector Per Periode / Per Bulan */}
-        <div className="flex items-center gap-2">
+        {/* Kalender Selector: Pilihan Bulan & Tahun */}
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
             <button
               onClick={handlePrevMonth}
-              className="p-1.5 hover:bg-white rounded-lg text-slate-600 transition"
+              disabled={selectedYear === boundsInfo.startY && selectedMonth <= boundsInfo.startM}
+              className="p-1.5 hover:bg-white disabled:opacity-30 disabled:hover:bg-transparent rounded-lg text-slate-600 transition"
               title="Bulan Sebelumnya"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <div className="flex items-center gap-2 px-3">
+
+            <div className="flex items-center gap-2 px-2.5">
               <Calendar className="w-4 h-4 text-blue-600" />
+              
+              {/* Dropdown Bulan */}
               <select
                 value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
+                onChange={(e) => setSelectedMonth(Number(e.target.value))}
                 className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer py-1"
               >
-                {monthOptions.map((opt) => (
-                  <option key={opt.val} value={opt.val}>
-                    Periode: {opt.label}
+                {availableMonths.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+
+              <span className="text-slate-300 font-medium">/</span>
+
+              {/* Dropdown Tahun (Hanya dari tahun data terlama sampai tahun sekarang) */}
+              <select
+                value={selectedYear}
+                onChange={(e) => handleYearChange(Number(e.target.value))}
+                className="bg-transparent text-xs font-bold text-blue-700 focus:outline-none cursor-pointer py-1"
+              >
+                {boundsInfo.yearOptions.map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
                   </option>
                 ))}
               </select>
             </div>
+
             <button
               onClick={handleNextMonth}
-              className="p-1.5 hover:bg-white rounded-lg text-slate-600 transition"
+              disabled={selectedYear === boundsInfo.curY && selectedMonth >= boundsInfo.curM}
+              className="p-1.5 hover:bg-white disabled:opacity-30 disabled:hover:bg-transparent rounded-lg text-slate-600 transition"
               title="Bulan Berikutnya"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
+
           <span className="text-xs text-slate-400 font-semibold hidden sm:inline">
             ({filtered.length} Resi Terkirim)
           </span>

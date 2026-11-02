@@ -6,25 +6,43 @@ import {
   fleets,
   users,
 } from "@/db/schema";
-import { eq, desc, and, gte, lte } from "drizzle-orm";
+import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const month = searchParams.get("month"); // Format "YYYY-MM", e.g. "2026-10"
+    const period = searchParams.get("period") || searchParams.get("month"); // "YYYY-MM" or "YYYY"
 
     let conditions: any[] = [eq(shipments.status, "terkirim")];
 
-    if (month && /^\d{4}-\d{2}$/.test(month)) {
-      const [yearStr, monthStr] = month.split("-");
-      const year = parseInt(yearStr, 10);
-      const m = parseInt(monthStr, 10); // 1-12
-      const startDate = new Date(year, m - 1, 1, 0, 0, 0);
-      const endDate = new Date(year, m, 0, 23, 59, 59, 999);
-
-      conditions.push(gte(shipments.created_at, startDate));
-      conditions.push(lte(shipments.created_at, endDate));
+    if (period) {
+      if (/^\d{4}-\d{2}$/.test(period)) {
+        // Filter bulanan: YYYY-MM
+        const [yearStr, monthStr] = period.split("-");
+        const year = parseInt(yearStr, 10);
+        const m = parseInt(monthStr, 10);
+        const startDate = new Date(year, m - 1, 1, 0, 0, 0);
+        const endDate = new Date(year, m, 0, 23, 59, 59, 999);
+        conditions.push(gte(shipments.created_at, startDate));
+        conditions.push(lte(shipments.created_at, endDate));
+      } else if (/^\d{4}$/.test(period)) {
+        // Filter tahunan: YYYY
+        const year = parseInt(period, 10);
+        const startDate = new Date(year, 0, 1, 0, 0, 0);
+        const endDate = new Date(year, 11, 31, 23, 59, 59, 999);
+        conditions.push(gte(shipments.created_at, startDate));
+        conditions.push(lte(shipments.created_at, endDate));
+      }
     }
+
+    // Ambil rentang tanggal terlama dan terbaru data terkirim untuk opsi dinamis kalender
+    const [bounds] = await db
+      .select({
+        earliest: sql<string>`MIN(${shipments.created_at})`,
+        latest: sql<string>`MAX(${shipments.created_at})`,
+      })
+      .from(shipments)
+      .where(eq(shipments.status, "terkirim"));
 
     const records = await db
       .select({
@@ -102,6 +120,10 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
+      dateRange: {
+        earliest: bounds?.earliest || null,
+        latest: bounds?.latest || null,
+      },
       items,
     });
   } catch (error) {
